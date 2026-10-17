@@ -1,0 +1,108 @@
+# Alert rules (design doc: Alerting, Incident Response, Failure Scenarios).
+# severity: page = wake someone up; ticket = next business day.
+groups:
+  - name: theraflo-ads-safety
+    rules:
+      - alert: ServedAdBrokeHardConstraint
+        # The served-ad gate withheld an ad that a hard constraint should have removed upstream.
+        # Users were protected, but the constraint engine has a bug: treat as a safety incident.
+        expr: increase(theraflo_ads_safety_violations_total[5m]) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "Served-ad safety gate fired ({{ $labels.kind }})"
+          runbook: "Scenario J: consider the kill switch; find the decision path that produced it."
+
+      - alert: KillSwitchOn
+        expr: max(theraflo_ads_kill_switch) == 1
+        for: 1m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Global kill switch is on: no ads are being served"
+
+      - alert: FailClosedSpike
+        # Counters or budgets unreadable: requests fail closed to NO_AD (safe, but losing revenue).
+        expr: |
+          sum(rate(theraflo_ads_blocked_total{reason=~"frequency_unavailable|budget_unavailable"}[5m]))
+            / clamp_min(sum(rate(theraflo_ads_decisions_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 5% of ad requests fail closed (Redis or Postgres trouble)"
+
+  - name: theraflo-ads-availability
+    rules:
+      - alert: DependencyDown
+        expr: min by (name) (theraflo_ads_dependency_up) == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Dependency {{ $labels.name }} is not ready"
+
+      - alert: HighServerErrorRate
+        expr: |
+          sum(rate(theraflo_ads_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(theraflo_ads_http_requests_total[5m])), 1e-9) > 0.01
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 1% of requests fail with 5xx"
+
+      - alert: RankLatencyP99High
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(theraflo_ads_http_request_duration_seconds_bucket{route="/v1/ads/rank"}[5m]))
+          ) > 0.1
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Rank p99 latency above the 100 ms budget"
+
+      - alert: NoAdsServed
+        expr: |
+          sum(rate(theraflo_ads_decisions_total{served_by!~"no_ad|no_ads_holdout"}[15m])) == 0
+            and sum(rate(theraflo_ads_decisions_total[15m])) > 0
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Requests arrive but no ads are served (budgets, review backlog, or a bug)"
+
+  - name: theraflo-ads-pipeline
+    rules:
+      - alert: DeadLetteredMessages
+        expr: max by (queue) (rabbitmq_queue_messages_ready{queue=~".*\\.dlq"}) > 0
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Messages waiting in {{ $labels.queue }}: inspect and replay"
+
+      - alert: CreativeReviewBacklog
+        expr: max(theraflo_ads_review_queue_depth{kind="review"}) > 200
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: "Human review queue above 200 (LLM reviewer down or abstaining too much)"
+
+      - alert: ReviewerAbstainingTooMuch
+        # Most reviews going to humans usually means the model reviewer is down (fail closed).
+        expr: |
+          sum(increase(theraflo_ads_review_outcomes_total{outcome="human_review"}[1h]))
+            / clamp_min(sum(increase(theraflo_ads_review_outcomes_total[1h])), 1) > 0.8
+          and sum(increase(theraflo_ads_review_outcomes_total[1h])) > 20
+        labels: {severity: ticket}
+        annotations:
+          summary: "Over 80% of creatives routed to humans in the last hour"
+
+  - name: theraflo-ads-abuse
+    rules:
+      - alert: RateLimitedSurge
+        expr: sum by (scope) (rate(theraflo_ads_rate_limited_total[5m])) > 50
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Sustained rate limiting on {{ $labels.scope }} (abuse or a misbehaving client)"
+
+      - alert: RateLimiterFailingOpen
+        expr: increase(theraflo_ads_rate_limiter_errors_total[5m]) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "Rate limiter cannot reach Redis and is failing open"

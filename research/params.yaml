@@ -1,0 +1,11 @@
+# Scaling research (design doc: Phase 9 — Learning-Curve / Scaling Research).
+# A larger simulated log than the training pipeline's, so learning curves have enough clicks.
+simulation:
+  users: 12000
+  days: 28
+  seed: 11
+  epsilon: 0.1
+  personalization_exclusions: true
+split:
+  validation_days: 4
+  test_days: 6

@@ -1,0 +1,43 @@
+# rootsight: on call after each deploy, and a weekday-morning check.
+# Read-only: the cloud identity it signs in with can only read, and nothing here changes your infrastructure.
+name: Rootsight
+on:
+  workflow_run:
+    workflows: ["Deploy"]   # CHANGE THIS to the name of your deploy workflow
+    types: [completed]
+  schedule:
+    - cron: "0 7 * * 1-5"
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read     # the deploy runs and their failures, read-only
+  id-token: write   # short-lived OIDC sign-in to the cloud: no stored keys
+jobs:
+  watch:
+    name: Watch the deploy
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: self-hosted   # next to the stack, so it can reach its Prometheus
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx install "${{ vars.ROOTSIGHT_PACKAGE || 'rootsight' }}" && pipx inject rootsight "python-hcl2>=7"
+      - run: rootsight watch --env theraflo-ads --for 30m
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  check:
+    name: Morning check
+    if: github.event_name != 'workflow_run'
+    runs-on: self-hosted   # next to the stack, so it can reach its Prometheus
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx install "${{ vars.ROOTSIGHT_PACKAGE || 'rootsight' }}" && pipx inject rootsight "python-hcl2>=7"
+      - run: rootsight suggest --env theraflo-ads
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

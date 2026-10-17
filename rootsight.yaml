@@ -1,0 +1,14 @@
+# Rootsight workspace, written by `rootsight init`. Secrets are never kept here.
+workspace: theraflo-ads
+default_environment: theraflo-ads
+platform: compose
+ci: github
+features:
+- oncall
+- infra
+- helper
+llm:
+  provider: ollama
+  model: qwen3.5:9b
+  url: http://localhost:11434
+slack: null

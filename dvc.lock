@@ -1,0 +1,165 @@
+schema: '2.0'
+stages:
+  generate:
+    cmd: theraflo-ads ml generate
+    deps:
+    - path: src/theraflo_ads/policy
+      hash: md5
+      md5: 865e3e9d8b7c88802b95015386f8c320.dir
+      size: 29831
+      nfiles: 6
+    - path: src/theraflo_ads/safety
+      hash: md5
+      md5: 9922de5be0a3e51adf491a2c20d7d67c.dir
+      size: 9892
+      nfiles: 3
+    - path: src/theraflo_ads/simulator
+      hash: md5
+      md5: 65d3dd6c55329e91dcbe8ec7b670da90.dir
+      size: 29213
+      nfiles: 5
+    params:
+      params.yaml:
+        simulation:
+          users: 4000
+          days: 28
+          seed: 7
+          epsilon: 0.1
+          personalization_exclusions: true
+    outs:
+    - path: data/raw
+      hash: md5
+      md5: 33024db265a778fee204dd90b076097f.dir
+      size: 31321949
+      nfiles: 5
+  build:
+    cmd: theraflo-ads ml build
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: 33024db265a778fee204dd90b076097f.dir
+      size: 31321949
+      nfiles: 5
+    - path: src/theraflo_ads/ml/dataset.py
+      hash: md5
+      md5: 63d147937f5532b97ef304a64be496f2
+      size: 4224
+    - path: src/theraflo_ads/ml/features.py
+      hash: md5
+      md5: d0225e47656dba1078ac8f67069220d1
+      size: 8232
+    params:
+      params.yaml:
+        split:
+          validation_days: 4
+          test_days: 6
+    outs:
+    - path: data/features
+      hash: md5
+      md5: 3d9a92a80035b51355deb78b362acb4e.dir
+      size: 3942805
+      nfiles: 4
+  train:
+    cmd: theraflo-ads ml train
+    deps:
+    - path: data/features
+      hash: md5
+      md5: 3d9a92a80035b51355deb78b362acb4e.dir
+      size: 3942805
+      nfiles: 4
+    - path: src/theraflo_ads/ml/models.py
+      hash: md5
+      md5: a578c60835dfd49515925e45283f5033
+      size: 8029
+    - path: src/theraflo_ads/ml/post_training.py
+      hash: md5
+      md5: 80366b60e4f9fc10c0ad99f9eed46ac2
+      size: 3503
+    params:
+      params.yaml:
+        calibration:
+          ctr: isotonic
+          cvr: platt
+        model:
+          algorithm: lightgbm
+          num_boost_round: 400
+          learning_rate: 0.05
+          num_leaves: 15
+          min_data_in_leaf: 50
+    outs:
+    - path: models/candidates
+      hash: md5
+      md5: b09c554478ac9e0959de91ebbcc19781.dir
+      size: 52621
+      nfiles: 7
+  evaluate:
+    cmd: theraflo-ads ml evaluate
+    deps:
+    - path: data/features
+      hash: md5
+      md5: 3d9a92a80035b51355deb78b362acb4e.dir
+      size: 3942805
+      nfiles: 4
+    - path: data/raw
+      hash: md5
+      md5: 33024db265a778fee204dd90b076097f.dir
+      size: 31321949
+      nfiles: 5
+    - path: models/candidates
+      hash: md5
+      md5: b09c554478ac9e0959de91ebbcc19781.dir
+      size: 52621
+      nfiles: 7
+    - path: src/theraflo_ads/ml/evaluation.py
+      hash: md5
+      md5: 10bee14c732e57932d7b238e8011c809
+      size: 5391
+    - path: src/theraflo_ads/ope
+      hash: md5
+      md5: c2d5297a38d929bcba06cd8b9483c78c.dir
+      size: 8884
+      nfiles: 3
+    params:
+      params.yaml:
+        gates:
+          max_ece: 0.02
+          max_slice_log_loss_regression: 0.02
+          max_log_loss_regression: 0.0
+    outs:
+    - path: reports/evaluation.json
+      hash: md5
+      md5: 8579167bf2968f4411f0789631bc7f48
+      size: 11235
+    - path: reports/gates.json
+      hash: md5
+      md5: e14454d664646520e8e223e689053ce3
+      size: 264
+    - path: reports/metrics.json
+      hash: md5
+      md5: dc49f0ad54da69158da216aff3d5c785
+      size: 950
+    - path: reports/ope.json
+      hash: md5
+      md5: 712dcdcea43800fd8c2c2b4e4e2cddae
+      size: 2811
+    - path: reports/parity.json
+      hash: md5
+      md5: f871ac3511c846c2b78188bce7b04877
+      size: 494
+  register:
+    cmd: theraflo-ads ml register
+    deps:
+    - path: models/candidates
+      hash: md5
+      md5: b09c554478ac9e0959de91ebbcc19781.dir
+      size: 52621
+      nfiles: 7
+    - path: reports/gates.json
+      hash: md5
+      md5: e14454d664646520e8e223e689053ce3
+      size: 264
+    outs:
+    - path: reports/registered.json
+      hash: md5
+      md5: ed472c73445e42bcee00d7d19b832553
+      size: 262

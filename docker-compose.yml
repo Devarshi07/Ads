@@ -1,0 +1,184 @@
+# Local stack for Theraflo Ads (design doc: Suggested First Production Architecture).
+# Dev-only credentials; production uses managed services and a secrets manager.
+#
+#   docker compose up -d postgres redis rabbitmq     # infrastructure only (tests, local dev)
+#   docker compose --profile app up -d --build       # + migrations, api, relay, workers
+#   docker compose --profile monitoring up -d        # + Prometheus (alerts) and Grafana
+#   docker compose --profile jobs run --rm deletions # right-to-deletion job (cron in prod)
+#
+# The app profile needs keys in .env (`theraflo-ads gen-keys`).
+#
+# Every port is published on 127.0.0.1 only: the stack runs with dev credentials, and the
+# dev console (http://localhost:8000/ui) hands them to whoever can reach it.
+
+x-app-env: &app_env
+  THERAFLO_ADS_BACKEND: infra
+  THERAFLO_ADS_DATABASE_URL: postgresql+pg8000://theraflo:theraflo@postgres:5432/theraflo_ads
+  THERAFLO_ADS_REDIS_URL: redis://redis:6379/0
+  THERAFLO_ADS_AMQP_URL: amqp://theraflo:theraflo@rabbitmq:5672/%2F
+  THERAFLO_ADS_LAKE_PATH: /data/lake
+  THERAFLO_ADS_USER_HASH_KEY: ${THERAFLO_ADS_USER_HASH_KEY:-}
+  THERAFLO_ADS_TOKEN_KEY: ${THERAFLO_ADS_TOKEN_KEY:-}
+  THERAFLO_ADS_SESSION_KEY: ${THERAFLO_ADS_SESSION_KEY:-}
+  THERAFLO_ADS_METRICS_TOKEN: ${THERAFLO_ADS_METRICS_TOKEN:-}
+  # none (default: rules + human queue) | simulated | ollama (a local model, free)
+  # | anthropic (billed; needs ANTHROPIC_API_KEY)
+  THERAFLO_ADS_REVIEWER: ${THERAFLO_ADS_REVIEWER:-none}
+  THERAFLO_ADS_NARRATOR: ${THERAFLO_ADS_NARRATOR:-none}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # Ollama runs on the host machine, outside the stack (see extra_hosts below).
+  THERAFLO_ADS_OLLAMA_URL: ${THERAFLO_ADS_OLLAMA_URL:-http://host.docker.internal:11434}
+  THERAFLO_ADS_OLLAMA_MODEL: ${THERAFLO_ADS_OLLAMA_MODEL:-qwen3.5:9b}
+  THERAFLO_ADS_OLLAMA_THINK: ${THERAFLO_ADS_OLLAMA_THINK:-false}
+
+x-app-deps: &app_deps
+  postgres: {condition: service_healthy}
+  redis: {condition: service_healthy}
+  rabbitmq: {condition: service_healthy}
+  migrate: {condition: service_completed_successfully}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: theraflo
+      POSTGRES_PASSWORD: theraflo
+      POSTGRES_DB: theraflo_ads
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U theraflo -d theraflo_ads"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    # Counters are derived state rebuilt from Postgres, so no persistence is needed.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb",
+              "--maxmemory-policy", "volatile-lru"]
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: theraflo
+      RABBITMQ_DEFAULT_PASS: theraflo
+    ports:
+      - "127.0.0.1:${AMQP_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15672}:15672"
+      - "127.0.0.1:${RABBITMQ_METRICS_PORT:-15692}:15692"  # Prometheus endpoint (DLQ alerts)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  migrate:
+    profiles: [app, jobs]
+    build: .
+    command: ["theraflo-ads", "migrate"]
+    environment: *app_env
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    profiles: [app]
+    build: .
+    # One uvicorn worker per container: each process keeps its own Prometheus counters,
+    # so several workers behind one /metrics would each report part of the traffic.
+    # Scale with more containers instead; each is scraped as its own target.
+    command: ["theraflo-ads", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app_env
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    # Docker Desktop defines host.docker.internal; this also makes it resolve on Linux.
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    # For the dev console: the ranker lab reads (and promotes in) the model registry, jobs
+    # read the logged data and write reports. THERAFLO_ADS_POLICY=ranker serves from here too.
+    volumes:
+      - "./models:/home/app/models"
+      - "./reports:/home/app/reports"
+      - "./data:/home/app/data:ro"
+    depends_on: *app_deps
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  relay:
+    profiles: [app]
+    build: .
+    command: ["theraflo-ads", "relay"]
+    environment: *app_env
+    depends_on: *app_deps
+
+  accounting-worker:
+    profiles: [app]
+    build: .
+    command: ["theraflo-ads", "worker", "accounting"]
+    environment: *app_env
+    depends_on: *app_deps
+
+  features-worker:
+    profiles: [app]
+    build: .
+    command: ["theraflo-ads", "worker", "features"]
+    environment: *app_env
+    depends_on: *app_deps
+
+  analytics-worker:
+    profiles: [app]
+    build: .
+    command: ["theraflo-ads", "worker", "analytics"]
+    environment: *app_env
+    volumes: [lake:/data/lake]
+    depends_on: *app_deps
+
+  review-worker:
+    profiles: [app]
+    build: .
+    command: ["theraflo-ads", "review", "worker"]
+    environment: *app_env
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: *app_deps
+
+  deletions:
+    profiles: [jobs]
+    build: .
+    command: ["theraflo-ads", "privacy", "delete-pending"]
+    environment: *app_env
+    depends_on: *app_deps
+
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v2.54.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--web.enable-lifecycle"]
+    volumes: ["./monitoring/prometheus:/etc/prometheus:ro"]
+    ports: ["127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"]
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Open straight on the Theraflo dashboard instead of Grafana's welcome page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/theraflo-ads.json
+      # Cookies are per host, not per port: a session cookie left by any other Grafana on
+      # localhost would otherwise be sent here and rejected ("Unauthorized").
+      GF_AUTH_LOGIN_COOKIE_NAME: theraflo_grafana_session
+    volumes:
+      - "./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro"
+      - "./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro"
+    ports: ["127.0.0.1:${GRAFANA_PORT:-3000}:3000"]
+
+volumes:
+  pgdata:
+  lake:

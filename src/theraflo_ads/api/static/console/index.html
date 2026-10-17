@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Theraflo Ads Console</title>
+  <meta name="description" content="Dev console for the Theraflo Ads decisioning platform: app simulator, ranker lab, advertiser portal, review, jobs.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f8f86'/%3E%3Cpath d='M9 11h14M16 11v12' stroke='white' stroke-width='3.2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <!-- Relative, so the console still loads behind a proxy that rewrites absolute links
+       (the Kubernetes API server's service proxy, which LocalStack's Container Apps use). -->
+  <link rel="stylesheet" href="css/console.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">T</span>
+      <span class="brand-name">Theraflo Ads</span>
+      <span class="brand-sub">dev console</span>
+    </div>
+    <div class="topbar-status" id="topbar-status" aria-live="polite"></div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="theme-toggle" type="button" title="Toggle light / dark" aria-label="Toggle light or dark theme">◐</button>
+      <button class="icon-btn" id="calls-toggle" type="button" title="Show API calls" aria-label="Show API calls">⇄</button>
+    </div>
+  </header>
+  <div class="shell">
+    <nav class="sidenav" id="sidenav" aria-label="Console sections"></nav>
+    <main id="main" class="main" tabindex="-1">
+      <div class="boot">Loading the console…</div>
+    </main>
+  </div>
+  <aside class="calls" id="calls" aria-label="API calls made by this console" hidden>
+    <div class="calls-head">
+      <strong>API calls</strong>
+      <span class="muted">every request this console sent, newest first (credentials are never shown)</span>
+      <button class="btn small ghost" id="calls-clear" type="button">Clear</button>
+      <button class="btn small ghost" id="calls-close" type="button">Close</button>
+    </div>
+    <ol class="calls-list" id="calls-list"></ol>
+  </aside>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+  <div class="modal-root" id="modal-root"></div>
+</body>
+</html>

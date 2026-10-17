@@ -1,0 +1,7 @@
+# The deployed image plus the simulated training log (data/raw, about 30 MB), so the console's
+# RL (FQI) and drift jobs can run in the cloud. The project's .dockerignore keeps data out of
+# the main image on purpose; this is a practice layer, built with data/raw as the context:
+#
+#   docker build -t theraflo-ads-api:v5 -f deploy/localstack-azure/Dockerfile.data data/raw
+FROM theraflo-ads-api:v4
+COPY --chown=app:app . /home/app/data/raw

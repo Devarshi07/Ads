@@ -1,0 +1,26 @@
+# Training pipeline parameters (dvc.yaml stages read their sections).
+simulation:
+  users: 4000
+  days: 28
+  seed: 7
+  epsilon: 0.1
+  personalization_exclusions: true
+split:
+  validation_days: 4
+  test_days: 6
+model:
+  algorithm: lightgbm      # lightgbm | logistic
+  num_boost_round: 400
+  learning_rate: 0.05
+  num_leaves: 15
+  min_data_in_leaf: 50
+calibration:
+  ctr: isotonic
+  cvr: platt
+gates:
+  max_ece: 0.02
+  max_slice_log_loss_regression: 0.02
+  max_log_loss_regression: 0.0
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  experiment: theraflo-ads-ranking

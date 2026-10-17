@@ -1,0 +1,39 @@
+*.egg-info/
+*.jsonl
+.env
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+data/
+mlartifacts/
+mlruns/
+models/
+reports/
+var/
+mlflow.db
+# rootsight
+artifacts/
+.rootsight/*.tmp
+
+# Local credentials (keep the shareable environment template)
+.env.*
+!.env.example
+*.pem
+*.key
+.dvc/config.local
+
+# Local emulator state, caches, and tool permissions
+.lstk/
+.dvc/cache/
+.dvc/tmp/
+.rootsight/
+
+# Generated files
+*.py[cod]
+*.log
+*.db-wal
+*.db-shm
+build/
+dist/

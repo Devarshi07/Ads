@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: theraflo-ads
+    folder: Theraflo Ads
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

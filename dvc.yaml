@@ -1,0 +1,63 @@
+# Training pipeline (design doc: DVC Strategy). Run inside the venv: `dvc repro`.
+stages:
+  generate:
+    cmd: theraflo-ads ml generate
+    deps:
+      - src/theraflo_ads/simulator
+      - src/theraflo_ads/policy
+      - src/theraflo_ads/safety
+    params:
+      - simulation
+    outs:
+      - data/raw
+  build:
+    cmd: theraflo-ads ml build
+    deps:
+      - data/raw
+      - src/theraflo_ads/ml/dataset.py
+      - src/theraflo_ads/ml/features.py
+    params:
+      - split
+    outs:
+      - data/features
+  train:
+    cmd: theraflo-ads ml train
+    deps:
+      - data/features
+      - src/theraflo_ads/ml/models.py
+      - src/theraflo_ads/ml/post_training.py
+    params:
+      - model
+      - calibration
+    outs:
+      - models/candidates
+  evaluate:
+    cmd: theraflo-ads ml evaluate
+    deps:
+      - data/raw
+      - data/features
+      - models/candidates
+      - src/theraflo_ads/ml/evaluation.py
+      - src/theraflo_ads/ope
+    params:
+      - gates
+    metrics:
+      - reports/metrics.json:
+          cache: false
+    outs:
+      - reports/evaluation.json:
+          cache: false
+      - reports/gates.json:
+          cache: false
+      - reports/parity.json:
+          cache: false
+      - reports/ope.json:
+          cache: false
+  register:
+    cmd: theraflo-ads ml register
+    deps:
+      - models/candidates
+      - reports/gates.json
+    outs:
+      - reports/registered.json:
+          cache: false

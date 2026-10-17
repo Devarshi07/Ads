@@ -1,0 +1,260 @@
+# promtool unit tests for alerts.yml: synthetic series in, expected alerts out.
+#   docker run --rm --entrypoint promtool -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+#     prom/prometheus:v2.54.1 test rules /etc/prometheus/alerts_test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ----- safety -----
+  - name: a withheld served ad pages immediately, labeled by kind
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_safety_violations_total{kind="restricted_category"}'
+        values: '0 0 0 1 1 1 1 1'
+      - series: 'theraflo_ads_safety_violations_total{kind="unapproved_ad"}'
+        values: '0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ServedAdBrokeHardConstraint
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ServedAdBrokeHardConstraint
+        exp_alerts:
+          - exp_labels: {severity: page, kind: restricted_category}
+            exp_annotations:
+              summary: "Served-ad safety gate fired (restricted_category)"
+              runbook: "Scenario J: consider the kill switch; find the decision path that produced it."
+      - eval_time: 10m  # no new violations in the last 5 minutes: resolved
+        alertname: ServedAdBrokeHardConstraint
+        exp_alerts: []
+
+  - name: kill switch alerts after a minute on
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_kill_switch{instance="api-1"}'
+        values: '0 1 1 1 1'
+      - series: 'theraflo_ads_kill_switch{instance="api-2"}'
+        values: '0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KillSwitchOn
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KillSwitchOn
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Global kill switch is on: no ads are being served"
+
+  - name: fail-closed spike counts only infrastructure blocks
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_decisions_total{served_by="no_ad",placement="home_feed"}'
+        values: '0+100x20'
+      - series: 'theraflo_ads_blocked_total{reason="frequency_unavailable"}'
+        values: '0+10x20'
+      - series: 'theraflo_ads_blocked_total{reason="kill_switch"}'
+        values: '0+90x20'
+    alert_rule_test:
+      - eval_time: 4m  # condition true, but not for 5 minutes yet
+        alertname: FailClosedSpike
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: FailClosedSpike
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "More than 5% of ad requests fail closed (Redis or Postgres trouble)"
+
+  - name: policy blocks alone never trigger the fail-closed alert
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_decisions_total{served_by="no_ad",placement="journal"}'
+        values: '0+100x20'
+      - series: 'theraflo_ads_blocked_total{reason="placement_not_allowed"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: FailClosedSpike
+        exp_alerts: []
+
+  # ----- availability -----
+  - name: a dependency down for two minutes pages, per dependency
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_dependency_up{name="frequency_store"}'
+        values: '1 1 0 0 0 0 0'
+      - series: 'theraflo_ads_dependency_up{name="system_of_record"}'
+        values: '1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DependencyDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DependencyDown
+        exp_alerts:
+          - exp_labels: {severity: page, name: frequency_store}
+            exp_annotations:
+              summary: "Dependency frequency_store is not ready"
+
+  - name: 5xx above 1% for five minutes pages
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_http_requests_total{route="/v1/ads/rank",method="POST",status="200"}'
+        values: '0+100x20'
+      - series: 'theraflo_ads_http_requests_total{route="/v1/ads/rank",method="POST",status="503"}'
+        values: '0+5x20'
+      - series: 'theraflo_ads_http_requests_total{route="/v1/events",method="POST",status="429"}'
+        values: '0+50x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighServerErrorRate
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "More than 1% of requests fail with 5xx"
+
+  - name: rank p99 above 100 ms for ten minutes
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_http_request_duration_seconds_bucket{route="/v1/ads/rank",le="0.05"}'
+        values: '0+50x30'
+      - series: 'theraflo_ads_http_request_duration_seconds_bucket{route="/v1/ads/rank",le="0.1"}'
+        values: '0+90x30'
+      - series: 'theraflo_ads_http_request_duration_seconds_bucket{route="/v1/ads/rank",le="0.25"}'
+        values: '0+100x30'
+      - series: 'theraflo_ads_http_request_duration_seconds_bucket{route="/v1/ads/rank",le="+Inf"}'
+        values: '0+100x30'
+      # A slow route that is not rank must not count.
+      - series: 'theraflo_ads_http_request_duration_seconds_bucket{route="/v1/advertiser/report",le="+Inf"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RankLatencyP99High
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: RankLatencyP99High
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Rank p99 latency above the 100 ms budget"
+
+  - name: requests but no ads for fifteen minutes
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_decisions_total{served_by="heuristic",placement="home_feed"}'
+        values: '500x60'
+      - series: 'theraflo_ads_decisions_total{served_by="no_ad",placement="home_feed"}'
+        values: '0+40x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NoAdsServed
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Requests arrive but no ads are served (budgets, review backlog, or a bug)"
+
+  - name: ads still being served means no NoAdsServed alert
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_decisions_total{served_by="ranker",placement="home_feed"}'
+        values: '0+1x60'
+      - series: 'theraflo_ads_decisions_total{served_by="no_ad",placement="home_feed"}'
+        values: '0+40x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NoAdsServed
+        exp_alerts: []
+
+  # ----- pipeline -----
+  - name: dead letters waiting for ten minutes, per queue
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_queue_messages_ready{queue="accounting.dlq"}'
+        values: '0 0 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
+      - series: 'rabbitmq_queue_messages_ready{queue="accounting"}'
+        values: '500x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DeadLetteredMessages
+        exp_alerts:
+          - exp_labels: {severity: ticket, queue: accounting.dlq}
+            exp_annotations:
+              summary: "Messages waiting in accounting.dlq: inspect and replay"
+
+  - name: review backlog above 200 for an hour
+    interval: 5m
+    input_series:
+      - series: 'theraflo_ads_review_queue_depth{kind="review"}'
+        values: '250x20'
+      - series: 'theraflo_ads_review_queue_depth{kind="audit"}'
+        values: '900x20'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CreativeReviewBacklog
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: CreativeReviewBacklog
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Human review queue above 200 (LLM reviewer down or abstaining too much)"
+
+  - name: most creatives routed to humans (reviewer down, failing closed)
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_review_outcomes_total{outcome="human_review"}'
+        values: '0+3x90'
+      - series: 'theraflo_ads_review_outcomes_total{outcome="auto_approved"}'
+        values: '0+0x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: ReviewerAbstainingTooMuch
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Over 80% of creatives routed to humans in the last hour"
+
+  - name: a quiet hour with few reviews does not alert
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_review_outcomes_total{outcome="human_review"}'
+        values: '0+0.2x90'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: ReviewerAbstainingTooMuch
+        exp_alerts: []
+
+  # ----- abuse -----
+  - name: sustained rate limiting, per scope
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_rate_limited_total{scope="rank"}'
+        values: '0+6000x30'
+      - series: 'theraflo_ads_rate_limited_total{scope="events"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RateLimitedSurge
+        exp_alerts:
+          - exp_labels: {severity: ticket, scope: rank}
+            exp_annotations:
+              summary: "Sustained rate limiting on rank (abuse or a misbehaving client)"
+
+  - name: rate limiter failing open
+    interval: 1m
+    input_series:
+      - series: 'theraflo_ads_rate_limiter_errors_total'
+        values: '0 0 0 4 9 9 9 9 9 9 9 9'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RateLimiterFailingOpen
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Rate limiter cannot reach Redis and is failing open"
+      - eval_time: 11m
+        alertname: RateLimiterFailingOpen
+        exp_alerts: []

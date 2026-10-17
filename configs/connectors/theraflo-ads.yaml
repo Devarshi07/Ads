@@ -1,0 +1,24 @@
+# Written by `rootsight init` for Docker Compose; the queries fit this stack's own metrics.
+name: theraflo-ads
+label: theraflo-ads
+prometheus: http://localhost:9090
+alerts:
+  # Hand-fixed: rootsight 0.1.2's init wrote `prometheus_rules: true`, which firing_alerts() does not read.
+  prometheus: http://localhost:9090
+  default_service: api
+metrics:
+  queries:
+    requests: sum(rate(http_requests_total{service="$service"}[2m]))
+    errors_by_status: sum by (status) (rate(http_requests_total{service="$service",status=~"5.."}[2m]))
+    p95_seconds: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service="$service"}[2m])))
+infrastructure:
+  platform: docker
+  project: theraflo-ads
+changes_target:
+  platform: compose
+  max_replicas: 20
+  max_monthly_usd: 1000
+  project: theraflo-ads
+  file: docker-compose.yml
+code:
+  path: .
